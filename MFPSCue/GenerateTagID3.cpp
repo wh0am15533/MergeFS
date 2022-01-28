@@ -395,7 +395,7 @@ std::vector<std::byte> GenerateTagID3(const CueSheet& cueSheet, CueSheet::File::
     // TODO
   }
 
-  id3Tag.AddFrame(std::make_shared<ID3TextFrame>(id3Tag, SigLeTSSE, L"MFPSCue"sv, UseUtf8));
+  id3Tag.AddFrame(std::make_shared<ID3TextFrame>(id3Tag, SigLeTSSE, L"MFPSCue"s, UseUtf8)); // EDIT HERE J.E. - L"MFPSCue"sv
 
 
   //
