@@ -1,11 +1,9 @@
 # MergeFS
 
-## これは？
+Software for Windows that mainly mounts multiple directories as a single directory.
+The plugin also supports mounting archive files and CUE sheets.
 
-主に複数のディレクトリを単一のディレクトリとしてマウントするWindows用ソフトウェアです。  
-プラグインにより、アーカイブファイルやCUEシートのマウントにも対応しています。
-
-例えば、以下のようにディレクトリAとディレクトリBがあったとして、
+For example, if you have directory A and directory B as follows:
 
 - A
   - abc
@@ -17,7 +15,7 @@
   - mno
     - pqr
 
-これをディレクトリCに以下の通りにマウントするソフトウェアです。
+It is software that mounts this in directory C as follows.
 
 - C
   - abc
@@ -27,164 +25,110 @@
   - mno
     - pqr
 
-おそらくLinuxでのUnionFSやOverlayFSに似たものだと思います（使ったことがないので分かりませんが）。
+Probably similar to UnionFS or OverlayFS on Linux (I don't know because I've never used it).
+The mount itself uses the[Dokany](https://github.com/dokan-dev/dokany) library.
 
-マウント自体には[Dokany](https://github.com/dokan-dev/dokany)ライブラリを使用しています。
 
-## 用途
+## Use
 
-- 複数のドライブにまたがって管理することになってしまったものを、一つに纏めたい
-- アーカイブファイルを展開せずに中身のファイルを扱いたい
-  - 更に、アーカイブファイルに変更を加えずにマウント先でファイル変更を伴う作業をしたい
-- CUE+FLACで管理している音楽ファイルをトラックごとに切り出すためだけにディスク容量を使用したくない
+- I want to combine things that have been managed across multiple drives into one
+- I want to handle the contents of the file without expanding the archive file
+  - Furthermore, I want to work with file changes at the mount destination without making changes to the archive file.
+- I don't want to use the disk space just to cut out music files managed by CUE + FLAC for each track.
 
-といった用途を想定しています。
+It is supposed to be used for such purposes.
 
-## 詳細な説明
+## Detailed explanation
 
-### マウントポイント
+### Mount point
 
-マウント先のことを**マウントポイント**と呼びます。  
-最初の例では、ディレクトリCのことです。
+The mount destination is called the mount point .
+In the first example, it's directory C.
+The mount point can be a drive or a directory on the NTFS file system. It seems that you need to specify an unused drive letter when specifying a drive, and a directory that already exists when specifying a directory on the NTFS file system. It should be possible to mount it as a network drive depending on the support, but since all the processing around here is delegated to[Dokany](https://github.com/dokan-dev/dokany), please see that.
 
-マウントポイントにはドライブか、NTFSファイルシステム上のディレクトリを指定できます。
-ドライブを指定する場合は使われていないドライブレターを、NTFSファイルシステム上のディレクトリを指定する場合は既に存在するディレクトリを指定する必要があるようです。
-他にもネットワークドライブとしてマウントすることも対応次第では可能なはずですが、この辺りの処理は全て[Dokany](https://github.com/dokan-dev/dokany)に委譲しているため、そちらをご覧ください。
+### Mount source
 
-### マウントソース
+The mount source is called the mount source (or simply the source).
+In the first example, it's directory A or directory B.
+Archive files and CUE sheets can be used as mount sources in addition to directories on the file system. The plug-in handles these mount sources.
+Some mount sources are writable (eg directories on the filesystem) and some are non-writable (eg archive files and CUE sheets), and if the first mount source is writable, the mount destination is also writable. Will be. At this time, the written changes are saved in the first mount source or metadata.
 
-マウント元のことを**マウントソース**（または単にソース）と呼びます。  
-最初の例では、ディレクトリAやディレクトリBのことです。
+### Metadata
 
-マウントソースとしてはファイルシステム上のディレクトリの他、アーカイブファイルやCUEシートを用いることができます。
-これらのマウントソースの対応は、プラグインが行います。
+Metadata is data used to represent information (changes) that cannot be represented by the mount source alone.
+For example, in the example of directories A and B above, suppose you mount to C in the order of A and B, and consider deleting C / mno at the mount destination C. The C / mno entity is in B, but B is not the first mount source and cannot be modified. Now we need the metadata to note that the C / mno has been deleted. Other metadata is used to reduce IO, for example when changing file attributes or moving files. Currently the metadata is stored in its own binary format, but we plan to move it to SQLite 3 in the future.
 
-マウントソースには書き込み可能なもの（たとえばファイルシステム上のディレクトリ）と書き込み不可能なもの（たとえばアーカイブファイルやCUEシート）があり、最初のマウントソースが書き込み可能である場合は、マウント先も書き込み可能になります。
-このとき、書き込まれた変更は最初のマウントソースかメタデータに保存されます。
+### Mount source priority
 
-### メタデータ
+Mount source priority is required when there are conflicting files and directories. In other words, if a file or directory with the same name exists in multiple mount sources, the mount source priority is used to determine which one to refer to at the mount destination. The rules for mounting source precedence are simple, with the one specified earlier taking precedence.
+For example, if a file with the same name exists in both mount source X and mount source Y, and they are mounted together in Z, Z / example will be X / example if they are mounted in the order of X and Y. Z / example points to Y / example if it is mounted in the order of Y and X.
 
-メタデータはマウントソースのみでは表せない情報（変更）を表すために用いるデータです。  
-例えば、先のディレクトリA、Bの例で、A、Bの順でCにマウントしたとし、マウント先のCでC/mnoを削除することを考えます。
-C/mnoの実体はBにありますが、Bは最初のマウントソースではないので変更を加えることができません。
-ここで、C/mnoが削除済みであるということを記すためにメタデータが必要となります。
-この他にも、例えばファイルの属性を変更したり、ファイルを移動する場合にIOを抑えるためにメタデータが使用されます。  
-現在メタデータは独自のバイナリ形式で保存されていますが、今後SQLite3に移す予定です。
+### Change at the mount destination
 
-### マウントソースの優先順位
-
-マウントソースの優先順位は、競合するファイルやディレクトリが存在するときに必要になります。
-つまり、同じ名前を持つファイルやディレクトリが複数のマウントソースに存在した場合、マウント先でどれを参照すれば良いかを判断するのに使われるのがマウントソースの優先順位です。  
-マウントソースの優先順位の規則は単純で、**先に指定されたものがより優先されます**。  
-例えば同じexampleという名前を持つファイルがマウントソースXとマウントソースYの双方に存在し、それらをあわせてZにマウントした場合、X、Yの順でマウントしていればZ/exampleはX/exampleを指し、反対にY、Xの順でマウントしていればZ/exampleはY/exampleを指します。
-
-### マウント先での変更
-
-最初のマウントソースが書き込み可能である場合は、マウント先も書き込み可能になります。
-その際、加わった変更は最初のマウントソースに反映されます。  
-例えば、最初のディレクトリA、B、Cの例でA、Bの順にマウントしているとして、新たにC/stuを作成した場合、ディレクトリAにA/stuとして新たなファイルが作成されます。他に、C/mno/vwuを作成した場合、最初にA/mnoディレクトリがAに作成され、その後にA/mno/vwuが作成されます。
+If the first mount source is writable, then the mount destination is also writable. The changes you make will be reflected in the first mount source.
+For example, if you create a new C / stu assuming that you are mounting A and B in the first directory A, B, and C, a new file will be created in directory A as A / stu. Alternatively, if you create a C / mno / vwu, the A / mno directory is first created in A, followed by the A / mno / vwu.
 
 ### Case sensitivity
 
-Case sensitivityとは、アルファベットの大文字小文字の区別のことです。  
-例えばWindowsでは、通常NTFSボリュームにおいてexample.txtというファイルにExample.txtとしてアクセスできます。またexample.datとExample.datが同じディレクトリに存在できません。
-一方Linuxなどでは、通常example.txtというファイルにExample.txtとしてアクセスできない代わりに、example.datとExample.datが同じディレクトリに存在できます。
-
-MergeFSにおいて、ファイル名の大文字小文字を区別するかはマウント時のオプションで指定されます。  
-ここで指定されたものは、LibMergeFSが管轄するメタデータ等の管理においては適用されますが、LibMergeFSの管轄外であるソースプラグインでは、そのソースプラグインの実装により適用されないことがあります。  
-今のところ、MFPSFileSystem以外は大文字小文字の区別の指定が効くようになっています。MFPSFileSystemでは、WindowsのAPIであるCreateFileを呼び出したときの結果に依存します。基本的には、指定によらず大文字小文字が区別されません。
-
-ソースプラグインに渡すファイル名の大文字小文字の調整をLibMergeFS側で行い、ソースプラグインでの対応を不要にすることも検討中です。
+Case sensitivity is the case sensitivity of the alphabet.
+For example, on Windows, you can usually access a file called example.txt on an NTFS volume as Example.txt. Also, example.dat and Example.dat cannot exist in the same directory. On Linux, on the other hand, instead of normally not being able to access a file called example.txt as Example.txt, example.dat and Example.dat can exist in the same directory.
+In MergeFS, whether to distinguish the case of the file name is specified by the option at the time of mounting. What is specified here is applied in the management of metadata etc. under the jurisdiction of LibMergeFS, but it may not be applied to the source plug-in that is not under the jurisdiction of LibMergeFS depending on the implementation of the source plug-in. For now, except for the MFPSFileSystem, the case-sensitive specification is effective. The MFPSFileSystem depends on the result of calling the Windows API CreateFile. Basically, it is not case sensitive regardless of the specification. We are also considering adjusting the case of the file name passed to the source plug-in on the
+LibMergeFS side so that the source plug-in does not need to support it.
 
 ### Case preservation
 
-Case preservationとは、ファイルを保存する際に大文字小文字を維持するかどうかです。  
-例えばNTFSではExample.txtという名前で保存すると、そのままExample.txtになります。一方でFAT16では、8.3形式のファイル名にしか対応していない場合、ファイル名はすべて大文字に変換されて保存されます。つまり、Example.txtとして保存しようとすると、EXAMPLE.TXTに変換されて保存されます。
+Case preservation is whether to preserve the case when saving the file.
+For example, in NTFS, if you save it as Example.txt, it will become Example.txt as it is. On the other hand, in FAT16, if only 8.3 file names are supported, the file names will be converted to all uppercase and saved. In other words, if you try to save it as Example.txt, it will be converted to EXAMPLE.TXT and saved. In MergeFS, whether case is preserved depends on each mount source. The MFPSFileSystem, which currently has the only writable mount source, depends on the result of calling the Windows API CreateFile, as in the case of Case sensitivity. Basically, it depends on the file system of the volume where the directory from which the mount source resides resides. For NTFS, for example, case is preserved.
 
-MergeFSにおいて、大文字小文字が維持されるかは各マウントソースによります。  
-現在存在する唯一の書き込み可能なマウントソースを持つMFPSFileSystemでは、Case sensitivityの場合同様WindowsのAPIであるCreateFileを呼び出したときの結果に依存します。基本的には、そのマウントソースのもととなるディレクトリが存在するボリュームのファイルシステムによります。
-例えばNTFSの場合、大文字小文字が維持されます。
+## Project structure
 
-## プロジェクト構成
+This project consists of three types: LibMergeFS , which is the core, a client, and a plug-in.
 
-本プロジェクトは、コアである**LibMergeFS**と、クライアント、そしてプラグインの3種類からなります。
+### Core
 
-### コア
-
-DLLの形式で、コア機能を担います。
+It is in the form of a DLL and is responsible for the core functions
 
 - **LibMergeFS**  
-  各マウントソースを束ね、一つのマウントソースとしてDokanyに提供する役割を持ちます。  
-  C++で書かれています。
+  It has the role of bundling each mount source and providing it to Dokany as one mount source. Written in C ++.
 
-### クライアント（フロントエンド）
+### Client (front end)
 
-実行可能ファイルの形で、ユーザーにコアである**LibMergeFS**の機能を提供します。
+It provides the user with the core LibMergeFS functionality in the form of an executable file.
 
 - **MergeFS**  
-  GUIを備え、最終的にメインのフロントエンドにする予定のものです。  
-  C#で書く予定ですが、まだほとんど未完成です。C#書けない。誰か助けて。
+  It will have a MergeFS GUI and will eventually be the main front end.
 
 - **MergeFSCC**  
-  CLIのフロントエンドです。
-  もともとコア機能のテスト用に作成しましたが、これはこれでまた別のフロントエンドとして完成させる予定です。  
-  C++で書かれています。
+  The front end of the MergeFSCC CLI. Originally created for testing core functionality, this will be completed as another front end.Written in C ++.
 
 - **MergeFSMC**  
-  タスクトレイ常駐型のフロントエンドです。  
-  YAMLで記述した設定ファイルを読み込んでマウントできます。  
-  おそらく最も実用的なクライアントです。  
-  C++で書かれています。
+  MergeFSMC task tray resident front end. You can read and mount the configuration file written in YAML. Probably the most practical client. Written in C ++.
 
-### プラグイン
+### Plugin
 
-DLLの形式で、コア機能に様々な機能を追加します。
+It adds various functions to the core functions in the form of DLL.
 
-#### ソースプラグイン
+#### Source plugin
 
-現在提供する唯一のプラグイン形式です。
-様々なもの（アーカイブファイルや実際のファイルシステム上のディレクトリ）をマウントできるようにします。
+This is the only plugin format currently available. Allows you to mount various things (archive files and directories on the actual file system).
 
 - **MFPSFileSystem**  
-  実際のファイルシステム上のディレクトリをマウントします。  
-  C++で書かれています。
+  MFPSFileSystem Mounts a directory on the actual file system. Written in C ++.
 
 - **MFPSArchive**  
-  アーカイブファイルをマウントします。
-  アーカイブファイル内に存在するアーカイブファイルも再帰的にディレクトリとして読み込みます。
-  非圧縮ファイル（tarボール等）など可能ならばメモリ上に展開せず直接データを読み取りますが、通常の圧縮ファイルの場合は最初にメモリ上に展開を行います。（コンパイル時オプションで変更も可能です。）  
-  アーカイブファイルの読み取りに[7-Zip](https://sevenzip.osdn.jp/)を使用しています。  
-  C++で書かれています。
+  Mount the MFPS Archive archive file. The archive file existing in the archive file is also recursively read as a directory. If possible, uncompressed files (tarball, etc.) are read directly without decompressing them in memory, but in the case of normal compressed files, they are first decompressed in memory. (It can be changed with compile-time options.) I am using 7-Zip to read the archive file . Written in C ++.
 
 - **MFPSCue**  
-  CUE+BIN、CUE+FLAC、CUE+WAVで保存された音楽ファイルをマウントします。
-  CD-DAとしてではなく、各トラックごとに分割されたWAVファイル群としてマウントします。
-  こちらもMFPSArchive同様全てをメモリ上に展開せず必要に応じてデコードするようにしています。（コンパイル時オプションで変更も可能です。）  
-  FLACのデコードに[libFLAC及びlibFLAC++](https://xiph.org/flac/)を使用しています。  
-  C++で書かれています。
+  Mounts music files saved in MFPSCue CUE + BIN, CUE + FLAC, CUE + WAV. Mount it as a group of WAV files divided for each track, not as a CD-DA. As with MFP Archive, everything is not expanded in memory and decoded as needed. (It can be changed by compile time option.) I am using libFLAC and libFLAC ++ for FLAC decoding . Written in C ++.
 
 - **MFPSNull**  
-  何も中身を持たない読み取り専用ソースです。  
-  先頭にこれを配置することで、読み取り専用マウントにできます。  
-  C++で書かれています。
+  MFPSNull A read-only source with no content. You can make it a read-only mount by placing it at the beginning. Written in C ++.
 
-- **MFPSMemory** （予定）  
-  メモリ上に書き込み可能なソースをマウントするものとして作成予定です。  
-  C++で書く予定です。
+## How to build
 
-## ビルド方法
+You need a compiler that supports the Windows environment and C ++ 17. I have confirmed compilation with Microsoft Visual Studio 2017 (15.9.7).
 
-Windows環境とC++17に対応したコンパイラが必要です。
-Microsoft Visual Studio 2017 (15.9.7) でのコンパイルを確認しています。
+1. Clone this repository. Note that you need to clone recursively (including the submodules contained in this repository).
 
-1. このリポジトリをクローンします。
-   このとき、再帰的にクローンする（このリポジトリに含まれているsubmoduleを含めてクローンする）必要があることに注意してください。
+2. /MergeFS.sln and Build
 
-2. /MergeFS.slnを開き、ビルドします。
-
-## 未対応・未完成なもの
-
-- [ ] 全機能を使用できるCLIフロントエンド
-- [ ] GUIフロントエンド
-- [ ] セキュリティ属性
-- [ ] プラグインへのオプション
